@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Mortal Kombat - Final Strategy Edition</title>
+    <style>
+        body { background: #000; display: flex; flex-direction: column; align-items: center; color: white; font-family: 'Verdana', sans-serif; margin: 0; overflow: hidden; }
+        canvas { border: 4px solid #444; background: #111; display: none; box-shadow: 0 0 20px #cc0000; }
+        .shake { animation: shakeAnim 0.1s infinite; }
+        @keyframes shakeAnim { 0% { transform: translate(1px, 1px); } 50% { transform: translate(-3px, -2px); } 100% { transform: translate(2px, -1px); } }
+        
+        #selection-screen { width: 1024px; height: 576px; background: #1a1a1a; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 4px solid #cc0000; padding: 20px; box-sizing: border-box; }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; width: 100%; max-width: 900px; }
+        .card { padding: 12px; background: rgba(255,255,255,0.05); border: 2px solid #444; cursor: pointer; text-align: center; transition: 0.2s; border-radius: 4px; }
+        .card:hover { border-color: #ffcc00; background: rgba(255, 204, 0, 0.1); transform: scale(1.02); }
+        .card h3 { margin: 5px 0; color: #ffcc00; font-size: 16px; }
+        .card p { margin: 0; font-size: 11px; color: #bbb; line-height: 1.3; }
+        .disabled { opacity: 0.3; cursor: not-allowed; border-color: #222 !important; }
+
+        .ui { position: absolute; width: 1024px; display: none; justify-content: space-between; padding: 20px; box-sizing: border-box; pointer-events: none; }
+        .bar-container { width: 400px; background: rgba(0,0,0,0.6); padding: 10px; border-radius: 8px; border: 1px solid #333; }
+        .health-bar { height: 25px; background: #222; border: 2px solid #fff; position: relative; }
+        .health-fill { height: 100%; background: linear-gradient(90deg, #d00, #ff0); transition: width 0.2s; }
+        .def-bar { height: 12px; background: #111; margin-top: 8px; border: 1px solid #666; }
+        .def-fill { height: 100%; background: #a0f; width: 0%; box-shadow: 0 0 10px #a0f; }
+        
+        .info-panel { font-size: 10px; margin-top: 8px; color: #aaa; }
+        .active-tag { color: #0f0; }
+        #timer { font-size: 45px; color: #ffcc00; font-weight: bold; }
+        #restart-btn { display: none; position: absolute; top: 80%; padding: 15px 30px; background: #cc0000; color: white; border: none; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="selection-screen">
+        <h1 id="turn-text" style="color: #ffcc00; text-shadow: 2px 2px #000;">P1: ELIGE TU ULTI</h1>
+        <div id="options-grid" class="grid"></div>
+    </div>
+
+    <div class="ui" id="game-ui">
+        <div class="bar-container">
+            <div class="health-bar"><div id="p1-fill" class="health-fill" style="width: 100%;"></div></div>
+            <div class="def-bar"><div id="p1-def-bar" class="def-fill"></div></div>
+            <div class="info-panel" id="p1-info"></div>
+        </div>
+        <div id="timer">99</div>
+        <div class="bar-container" style="text-align: right;">
+            <div class="health-bar"><div id="p2-fill" class="health-fill" style="width: 100%;"></div></div>
+            <div class="def-bar"><div id="p2-def-bar" class="def-fill"></div></div>
+            <div class="info-panel" id="p2-info"></div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas" width="1024" height="576"></canvas>
+    <button id="restart-btn" onclick="location.reload()">VOLVER AL INICIO</button>
+
+    <script>
+        const canvas = document.querySelector('canvas');
+        const c = canvas.getContext('2d');
+        const gravity = 0.7;
+        let gameActive = false, timeRemaining = 99, projectiles = [];
+        let p1Choices = { ulti: null, def: null, armor: null, pas: [] };
+        let p2Choices = { ulti: null, def: null, armor: null, pas: [] };
+        let selectionStep = 0; // 0:P1U, 1:P2U, 2:P1D, 3:P2D, 4:P1A, 5:P2A, 6:P1Pas, 7:P2Pas
+
+        const ultis = [
+            {id:1, name:"BOLA FUEGO", desc:"Lanza un proyectil lento que inflige un 30% de daño al impactar."},
+            {id:2, name:"CONGELACIÓN", desc:"Inmoviliza al oponente por completo durante 5 segundos."},
+            {id:3, name:"TELEPORT", desc:"Aparece detrás del rival y lanza un golpe rápido de 15% de daño."},
+            {id:4, name:"CHAOS", desc:"Invierte los controles de movimiento del rival durante 7 segundos."}
+        ];
+        const definitives = [
+            {id:1, name:"TERREMOTO", desc:"Sacude la pantalla y lanza al rival al aire, aturdiéndolo."},
+            {id:2, name:"BERSERKER", desc:"Entra en modo furia: Daño x5 pero recibes el doble de daño (8s)."},
+            {id:3, name:"MANCHA DIABLO", desc:"Envenena al rival: pierde 2.5% de vida cada segundo (7s)."}
+        ];
+        const armors = [
+            {id:1, name:"PINCHOS", desc:"Pasiva: Devuelve el 50% de cualquier daño recibido al atacante."},
+            {id:2, name:"DIOS", desc:"Pasiva: Reduce de forma permanente todo el daño recibido en un 50%."}
+        ];
+        const passives = [
+            {id:1, name:"CURACIÓN", desc:"Recupera un 2% de vida cada 5 segundos de combate."},
+            {id:2, name:"FURIA", desc:"Al tener menos del 25% de vida: Defensa +50% y Ataque +10%."},
+            {id:3, name:"VAMPIRO", desc:"Cada puñetazo que conectes te cura un 1% de tu vida total."},
+            {id:4, name:"RAYO", desc:"Aumenta tu velocidad de movimiento y salto en un 30%."},
+            {id:5, name:"MAESTRO", desc:"Tu barra de habilidad Definitive se carga un 20% más rápido."},
+            {id:6, name:"PESADO", desc:"Eres inmune al retroceso cuando el oponente te golpea."}
+        ];
+
+        function renderOptions() {
+            const grid = document.getElementById('options-grid'); grid.innerHTML = '';
+            let list = selectionStep < 2 ? ultis : (selectionStep < 4 ? definitives : (selectionStep < 6 ? armors : passives));
+            const turn = selectionStep % 2 === 0 ? "P1" : "P2";
+            document.getElementById('turn-text').innerText = `${turn}: ELIGE ${selectionStep < 6 ? "HABILIDAD" : "PASIVAS (2)"}`;
+            
+            list.forEach(opt => {
+                const div = document.createElement('div');
+                const isUsed = (selectionStep === 7 && p1Choices.pas.includes(opt.id));
+                div.className = 'card' + (isUsed ? ' disabled' : '');
+                div.innerHTML = `<h3>${opt.name}</h3><p>${opt.desc}</p>`;
+                if(!isUsed) div.onclick = () => handleChoice(opt.id);
+                grid.appendChild(div);
+            });
+        }
+
+        function handleChoice(id) {
+            if (selectionStep === 0) p1Choices.ulti = id;
+            else if (selectionStep === 1) p2Choices.ulti = id;
+            else if (selectionStep === 2) p1Choices.def = id;
+            else if (selectionStep === 3) p2Choices.def = id;
+            else if (selectionStep === 4) p1Choices.armor = id;
+            else if (selectionStep === 5) p2Choices.armor = id;
+            else if (selectionStep === 6) { 
+                if(!p1Choices.pas.includes(id)) p1Choices.pas.push(id);
+                if(p1Choices.pas.length < 2) return;
+            }
+            else if (selectionStep === 7) {
+                if(!p2Choices.pas.includes(id)) p2Choices.pas.push(id);
+                if(p2Choices.pas.length < 2) return;
+                startKombat(); return;
+            }
+            selectionStep++; renderOptions();
+        }
+
+        function startKombat() {
+            gameActive = true;
+            document.getElementById('selection-screen').style.display = 'none';
+            document.getElementById('gameCanvas').style.display = 'block';
+            document.getElementById('game-ui').style.display = 'flex';
+            updateInterfaceInfo();
+            setInterval(() => {
+                if(gameActive && timeRemaining > 0) {
+                    timeRemaining--; document.getElementById('timer').innerText = timeRemaining;
+                    if(timeRemaining % 5 === 0) {
+                        if(p1Choices.pas.includes(1)) p1.health = Math.min(100, p1.health + 2);
+                        if(p2Choices.pas.includes(1)) p2.health = Math.min(100, p2.health + 2);
+                        updateUI();
+                    }
+                }
+            }, 1000);
+            animate();
+        }
+
+        function updateInterfaceInfo() {
+            const p1P = p1Choices.pas.map(id => passives[id-1].name).join("/");
+            const p2P = p2Choices.pas.map(id => passives[id-1].name).join("/");
+            document.getElementById('p1-info').innerHTML = `S:ATK Q:DEF | <span class="active-tag">${p1P}</span> | ${definitives[p1Choices.def-1].name} <br> <span id="p1-h">HITS: 0/5</span>`;
+            document.getElementById('p2-info').innerHTML = `↓:ATK -:DEF | <span class="active-tag">${p2P}</span> | ${definitives[p2Choices.def-1].name} <br> <span id="p2-h">HITS: 0/5</span>`;
+        }
+
+        class Fighter {
+            constructor({ x, color, side, fill, defBar, hUi, ctrl }) {
+                this.position = { x, y: 0 }; this.velocity = { x: 0, y: 0 };
+                this.width = 50; this.height = 150; this.color = color;
+                this.health = 100; this.defCharge = 0; this.combo = 0;
+                this.side = side; this.fill = fill; this.defBar = defBar; this.hUi = hUi;
+                this.ctrl = ctrl; this.isAttacking = false; this.isFrozen = false; this.isBerserker = false; this.isPoisoned = false;
+            }
+
+            draw() {
+                c.fillStyle = this.isFrozen ? '#00fbff' : (this.isPoisoned ? '#2d5a27' : (this.isBerserker ? '#a0f' : this.color));
+                c.fillRect(this.position.x, this.position.y, this.width, this.height);
+                if (this.isAttacking) {
+                    c.fillStyle = 'white';
+                    const px = this.side === 1 ? this.position.x + 50 : this.position.x - 40;
+                    c.fillRect(px, this.position.y + 60, 40, 20);
+                }
+            }
+
+            update() {
+                if (!this.isFrozen) { this.position.x += this.velocity.x; this.position.y += this.velocity.y; }
+                if (this.position.y + this.height + this.velocity.y >= canvas.height - 50) this.velocity.y = 0;
+                else this.velocity.y += gravity;
+                let charge = (this === p1 ? p1Choices.pas : p2Choices.pas).includes(5) ? 0.12 : 0.083;
+                if (this.defCharge < 100) { this.defCharge += charge; document.getElementById(this.defBar).style.width = this.defCharge + '%'; }
+                this.draw();
+            }
+
+            attack(target) {
+                if (this.isFrozen || !gameActive) return;
+                this.isAttacking = true;
+                if (Math.abs(this.position.x - target.position.x) < 120 && Math.abs(this.position.y - target.position.y) < 150) {
+                    const myP = this === p1 ? p1Choices.pas : p2Choices.pas;
+                    const hisP = target === p1 ? p1Choices.pas : p2Choices.pas;
+                    this.combo++;
+                    document.getElementById(this.hUi).innerText = `HITS: ${this.combo}/5`;
+                    if (!hisP.includes(6)) target.velocity.x = this.side * 12;
+                    if (myP.includes(3)) this.health = Math.min(100, this.health + 1);
+                    if (this.combo >= 5) { this.executeUlti(target); this.combo = 0; document.getElementById(this.hUi).innerText = `HITS: 0/5`; }
+                    else {
+                        let dmg = this.isBerserker ? 10 : 2;
+                        if (myP.includes(2) && this.health < 25) dmg *= 1.2;
+                        target.takeDamage(dmg, this);
+                    }
+                }
+                setTimeout(() => this.isAttacking = false, 150);
+            }
+
+            takeDamage(amt, attacker) {
+                const myArmor = this === p1 ? p1Choices.armor : p2Choices.armor;
+                const myP = this === p1 ? p1Choices.pas : p2Choices.pas;
+                let final = amt;
+                if (myArmor === 2) final *= 0.5;
+                if (this.isBerserker) final *= 2;
+                if (myP.includes(2) && this.health < 25) final *= 0.5;
+                this.health -= final;
+                if (myArmor === 1 && attacker) attacker.health -= final * 0.5;
+                updateUI();
+            }
+
+            executeUlti(target) {
+                const u = (this === p1 ? p1Choices.ulti : p2Choices.ulti);
+                if (u === 1) projectiles.push({ x: this.position.x, y: this.position.y + 50, speed: this.side * 15, owner: this });
+                else if (u === 2) { target.isFrozen = true; setTimeout(() => target.isFrozen = false, 5000); }
+                else if (u === 3) { this.position.x = target.position.x + (this.side * -70); this.side *= -1; target.takeDamage(15, this); }
+                else if (u === 4) { const o = {...target.ctrl}; target.ctrl.l = o.r; target.ctrl.r = o.l; setTimeout(()=>target.ctrl=o, 7000); }
+            }
+
+            useDef(target) {
+                if (this.defCharge < 100) return;
+                this.defCharge = 0;
+                const d = (this === p1 ? p1Choices.def : p2Choices.def);
+                if (d === 1) { canvas.classList.add('shake'); target.velocity.y = -15; setTimeout(()=>canvas.classList.remove('shake'), 3000); }
+                else if (d === 2) { this.isBerserker = true; setTimeout(()=>this.isBerserker = false, 8000); }
+                else if (d === 3) { target.isPoisoned = true; let t = 0; const i = setInterval(() => { if(t++ < 7 && gameActive) target.takeDamage(2.5, null); else {target.isPoisoned=false; clearInterval(i);} }, 1000); }
+            }
+        }
+
+        const p1 = new Fighter({ x: 100, color: '#1e90ff', side: 1, fill: 'p1-fill', defBar: 'p1-def-bar', hUi: 'p1-h', ctrl: { l: 'a', r: 'd', u: 'w', atk: 's', d: 'q' } });
+        const p2 = new Fighter({ x: 870, color: '#ff4757', side: -1, fill: 'p2-fill', defBar: 'p2-def-bar', hUi: 'p2-h', ctrl: { l: 'ArrowLeft', r: 'ArrowRight', u: 'ArrowUp', atk: 'ArrowDown', d: '-' } });
+
+        function updateUI() {
+            document.getElementById('p1-fill').style.width = Math.max(0, p1.health) + '%';
+            document.getElementById('p2-fill').style.width = Math.max(0, p2.health) + '%';
+        }
+
+        const keys = {};
+        window.addEventListener('keydown', e => {
+            keys[e.key] = true;
+            if (e.key === p1.ctrl.atk) p1.attack(p2);
+            if (e.key === p2.ctrl.atk) p2.attack(p1);
+            if (e.key === p1.ctrl.d) p1.useDef(p2);
+            if (e.key === p2.ctrl.d) p2.useDef(p1);
+        });
+        window.addEventListener('keyup', e => keys[e.key] = false);
+
+        function animate() {
+            if (!gameActive) return;
+            window.requestAnimationFrame(animate);
+            c.clearRect(0,0,1024,576);
+            c.fillStyle = '#222'; c.fillRect(0, 526, 1024, 50);
+
+            let v1 = p1Choices.pas.includes(4) ? 11 : 7;
+            let v2 = p2Choices.pas.includes(4) ? 11 : 7;
+
+            p1.velocity.x = 0; if(keys[p1.ctrl.l]) { p1.velocity.x = -v1; p1.side = -1; } if(keys[p1.ctrl.r]) { p1.velocity.x = v1; p1.side = 1; }
+            if(keys[p1.ctrl.u] && p1.velocity.y === 0) p1.velocity.y = -18;
+            p2.velocity.x = 0; if(keys[p2.ctrl.l]) { p2.velocity.x = -v2; p2.side = -1; } if(keys[p2.ctrl.r]) { p2.velocity.x = v2; p2.side = 1; }
+            if(keys[p2.ctrl.u] && p2.velocity.y === 0) p2.velocity.y = -18;
+
+            p1.update(); p2.update();
+
+            projectiles.forEach((p, i) => {
+                p.x += p.speed; c.fillStyle = 'orange'; c.beginPath(); c.arc(p.x, p.y, 20, 0, Math.PI*2); c.fill();
+                const t = p.owner === p1 ? p2 : p1;
+                if (p.x > t.position.x && p.x < t.position.x + 50 && p.y > t.position.y && p.y < t.position.y + 150) { t.takeDamage(30, p.owner); projectiles.splice(i,1); }
+            });
+
+            if (p1.health <= 0 || p2.health <= 0 || timeRemaining <= 0) {
+                gameActive = false; document.getElementById('restart-btn').style.display = 'block';
+                c.fillStyle = "gold"; c.font = "50px Arial"; c.textAlign = "center";
+                c.fillText(p1.health > p2.health ? "P1 VICTORIA" : "P2 VICTORIA", 512, 288);
+            }
+        }
+        renderOptions();
+    </script>
+</body>
+</html>
